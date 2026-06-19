@@ -7,3 +7,4 @@ test-ledger
 .yarn
 .surfpool
 programs/ksha-csi-cc/tests
+runbooks
