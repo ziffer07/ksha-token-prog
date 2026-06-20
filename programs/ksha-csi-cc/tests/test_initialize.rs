@@ -30,7 +30,9 @@ fn test_initialize() {
  
     let instruction = Instruction::new_with_bytes(
         program_id,
-        &ksha_csi_cc::instruction::InitPlatform {}.data(),
+        &ksha_csi_cc::instruction::InitPlatform {
+            admin: payer.pubkey(),
+        }.data(),
         ksha_csi_cc::accounts::InitPlatform {
             payer: payer.pubkey(),
             platform_state,
@@ -46,19 +48,22 @@ fn test_initialize() {
 
 
     let csi_project_id = "CSI-BIOCHAR-2026-001".to_string();
+    let owner_pubkey = payer.pubkey(); // stand-in for the plant owner's wallet in this test
 
     let (batch_acc, _batch_bump) = Pubkey::find_program_address(
-        &[b"batch", payer.pubkey().as_ref(), csi_project_id.as_bytes()], &program_id);
+        &[b"batch", owner_pubkey.as_ref(), csi_project_id.as_bytes()], &program_id);
     
 
     let create_batch_ix = Instruction::new_with_bytes(
         program_id,
         &ksha_csi_cc::instruction::CreateBatch{
+            owner: owner_pubkey,
             csi_project_id,
             verified_amount: 20,
         }.data(),
         ksha_csi_cc::accounts::CreateBatch{
-            owner: payer.pubkey(),
+            admin: payer.pubkey(),
+            platform_state,
             batch_account: batch_acc,
             system_program: anchor_lang::solana_program::system_program::ID,
         }.to_account_metas(None),
@@ -135,3 +140,93 @@ fn test_initialize() {
     assert_eq!(token_account_data.amount, 20);
     println!("ATA balance: {}", token_account_data.amount);
 }
+
+
+#[test]
+fn test_create_batch_rejects_non_admin() {
+    let program_id = ksha_csi_cc::id();
+    let real_admin = Keypair::new();
+    let attacker = Keypair::new(); // not the admin — should be rejected
+ 
+    let mut svm = LiteSVM::new();
+    let bytes = include_bytes!("../../../target/deploy/ksha_csi_cc.so");
+    svm.add_program(program_id, bytes).unwrap();
+    svm.airdrop(&real_admin.pubkey(), 1_000_000_000).unwrap();
+    svm.airdrop(&attacker.pubkey(), 1_000_000_000).unwrap();
+ 
+    let mint_keypair = Keypair::new();
+    let mint_pubkey = Signer::pubkey(&mint_keypair);
+ 
+    let (platform_state, _) = Pubkey::find_program_address(&[b"platform_state"], &program_id);
+    let (platform_authority, _) =
+        Pubkey::find_program_address(&[b"platform_authority"], &program_id);
+ 
+    // init_platform: real_admin is designated as the one true admin
+    let init_ix = Instruction::new_with_bytes(
+        program_id,
+        &ksha_csi_cc::instruction::InitPlatform {
+            admin: real_admin.pubkey(),
+        }
+        .data(),
+        ksha_csi_cc::accounts::InitPlatform {
+            payer: real_admin.pubkey(),
+            platform_state,
+            platform_authority,
+            mint: mint_pubkey,
+            token_program: anchor_spl::token::ID,
+            system_program: anchor_lang::solana_program::system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+ 
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(&[init_ix], Some(&real_admin.pubkey()), &blockhash);
+    let tx = VersionedTransaction::try_new(
+        VersionedMessage::Legacy(msg),
+        &[&real_admin, &mint_keypair],
+    )
+    .unwrap();
+    svm.send_transaction(tx).expect("init_platform should succeed");
+ 
+    // ── Now the attacker tries to call create_batch, signing themselves
+    // instead of real_admin. This should fail. ──
+    let csi_project_id = "FAKE-PROJECT-001".to_string();
+    let (batch_acc, _) = Pubkey::find_program_address(
+        &[b"batch", attacker.pubkey().as_ref(), csi_project_id.as_bytes()],
+        &program_id,
+    );
+ 
+    let malicious_create_batch_ix = Instruction::new_with_bytes(
+        program_id,
+        &ksha_csi_cc::instruction::CreateBatch {
+            owner: attacker.pubkey(), // attacker tries to mint to themselves
+            csi_project_id,
+            verified_amount: 999999, // arbitrary large fake amount
+        }
+        .data(),
+        ksha_csi_cc::accounts::CreateBatch {
+            admin: attacker.pubkey(), // attacker signs as themselves, NOT real_admin
+            platform_state,
+            batch_account: batch_acc,
+            system_program: anchor_lang::solana_program::system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+ 
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(
+        &[malicious_create_batch_ix],
+        Some(&attacker.pubkey()),
+        &blockhash,
+    );
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[&attacker]).unwrap();
+ 
+    let res = svm.send_transaction(tx);
+    assert!(
+        res.is_err(),
+        "SECURITY BUG: non-admin was able to create a batch! result: {:?}",
+        res
+    );
+    println!("Correctly rejected non-admin create_batch attempt: {:?}", res.err());
+}
+

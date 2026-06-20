@@ -29,9 +29,10 @@ pub mod ksha {
     /// guarantee. Acceptable for MVP since you control the only signer
     /// path into mint_batch; revisit before trusting this with buyers
     /// who can't audit your program logic themselves.
-    pub fn init_platform(ctx: Context<InitPlatform>) -> Result<()> {
+    pub fn init_platform(ctx: Context<InitPlatform>, admin: Pubkey) -> Result<()> {
         let platform = &mut ctx.accounts.platform_state;
         platform.mint = ctx.accounts.mint.key();
+        platform.admin = admin;
         platform.authority_bump = ctx.bumps.platform_authority;
         platform.bump = ctx.bumps.platform_state;
         Ok(())
@@ -43,14 +44,21 @@ pub mod ksha {
     /// build it — kept separate here since onboarding is stubbed.
     pub fn create_batch(
         ctx: Context<CreateBatch>,
+        owner: Pubkey,
         csi_project_id: String,
         verified_amount: u64,
     ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.admin.key(),
+            ctx.accounts.platform_state.admin,
+            ErrorCode::Unauthorized
+        );
+
         require!(csi_project_id.len() <= 32, ErrorCode::ProjectIdTooLong);
         require!(verified_amount > 0, ErrorCode::ZeroAmount);
 
         let batch = &mut ctx.accounts.batch_account;
-        batch.owner = ctx.accounts.owner.key();
+        batch.owner = owner;
         batch.csi_project_id = csi_project_id;
         batch.verified_amount = verified_amount;
         batch.minted_amount = 0;
@@ -143,13 +151,14 @@ pub mod ksha {
 #[account]
 pub struct PlatformState {
     pub mint: Pubkey,
+    pub admin: Pubkey,
     pub authority_bump: u8,
     pub bump: u8,
 }
 
 impl PlatformState {
     // discriminator(8) + mint(32) + authority_bump(1) + bump(1)
-    pub const LEN: usize = 8 + 32 + 1 + 1;
+    pub const LEN: usize = 8 + 32 + 32 + 1 + 1;
 }
 
 #[account]
@@ -210,14 +219,20 @@ pub struct InitPlatform<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(csi_project_id: String, verified_amount: u64)]
+#[instruction(owner: Pubkey, csi_project_id: String, verified_amount: u64)]
 pub struct CreateBatch<'info> {
     #[account(mut)]
-    pub owner: Signer<'info>,
+    pub admin: Signer<'info>,
+
+    #[account(
+        seeds = [b"platform_state"],
+        bump = platform_state.bump
+    )]
+    pub platform_state: Account<'info, PlatformState>,
 
     #[account(
         init,
-        payer = owner,
+        payer = admin,
         space = BatchAccount::LEN,
         seeds = [b"batch", owner.key().as_ref(), csi_project_id.as_bytes()],
         bump
@@ -288,6 +303,8 @@ pub struct RetireBatch<'info> {
 
 #[error_code]
 pub enum ErrorCode {
+    #[msg("Only the platform admin can perform this action")]
+    Unauthorized,
     #[msg("CSI project ID exceeds 32 characters")]
     ProjectIdTooLong,
     #[msg("Amount must be greater than zero")]
