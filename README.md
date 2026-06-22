@@ -430,4 +430,4 @@ MIT License
 
 ## Disclaimer
 
-This implementation is an MVP intended for educational and prototyping purposes. Production deployments should undergo security review, formal auditing, and additional governance controls before managing real-world csi assets.
+This implementation is an MVP intended for educational and prototyping purposes. Currently it is running on devnet and can do all the operations using terminal. Production deployments should undergo security review, formal auditing, and additional governance controls before managing real-world csi assets.
