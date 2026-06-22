@@ -14,6 +14,34 @@ pub mod ksha {
     // pub fn register_plant(...) -> Result<()> { ... }
     // pub fn submit_verification(...) -> Result<()> { ... }
 
+
+    // Registers a plant owner's wallet against a known CSI project ID.
+    // Admin-gated, same reasoning as create_batch: the plant owner
+    // shouldn't self-attest which project they own, since nothing
+    // would stop them from claiming someone else's project ID. You
+    // (the admin) personally verify identity during onboarding, then
+    // call this once per plant owner.
+    pub fn register_plant(
+        ctx: Context<RegisterPlant>,
+        owner: Pubkey,
+        csi_project_id: String,
+    ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.admin.key(),
+            ctx.accounts.platform_state.admin,
+            ErrorCode::Unauthorized
+        );
+        require!(csi_project_id.len() <= 32, ErrorCode::ProjectIdTooLong);
+ 
+        let plant = &mut ctx.accounts.plant_account;
+        plant.owner = owner;
+        plant.csi_project_id = csi_project_id;
+        plant.bump = ctx.bumps.plant_account;
+ 
+        Ok(())
+    }
+
+
     // ─────────────────────────────────────────────────────────
     // TOKEN INSTRUCTIONS — single global mint, MVP version
     // ─────────────────────────────────────────────────────────
@@ -38,36 +66,35 @@ pub mod ksha {
         Ok(())
     }
 
-    /// Creates the on-chain record for a verified batch, before any
-    /// tokens exist. In your real flow this would likely be called
-    /// from inside the onboarding/verification instruction once you
-    /// build it — kept separate here since onboarding is stubbed.
-    pub fn create_batch(
-        ctx: Context<CreateBatch>,
-        owner: Pubkey,
-        csi_project_id: String,
-        verified_amount: u64,
-    ) -> Result<()> {
-        require_keys_eq!(
-            ctx.accounts.admin.key(),
-            ctx.accounts.platform_state.admin,
-            ErrorCode::Unauthorized
-        );
+   pub fn create_batch(
+    ctx: Context<CreateBatch>,
+    csi_project_id: String,
+    verified_amount: u64,
+) -> Result<()> {
+    require_keys_eq!(
+        ctx.accounts.admin.key(),
+        ctx.accounts.platform_state.admin,
+        ErrorCode::Unauthorized
+    );
+    require!(csi_project_id.len() <= 32, ErrorCode::ProjectIdTooLong);
+    require!(verified_amount > 0, ErrorCode::ZeroAmount);
+    require_keys_eq!(
+        ctx.accounts.plant_account.owner,
+        ctx.accounts.owner.key(),
+        ErrorCode::OwnerMismatch
+    );
 
-        require!(csi_project_id.len() <= 32, ErrorCode::ProjectIdTooLong);
-        require!(verified_amount > 0, ErrorCode::ZeroAmount);
+    let batch = &mut ctx.accounts.batch_account;
+    batch.owner = ctx.accounts.plant_account.owner;
+    batch.csi_project_id = csi_project_id;
+    batch.verified_amount = verified_amount;
+    batch.minted_amount = 0;
+    batch.retired_amount = 0;
+    batch.minted = false;
+    batch.bump = ctx.bumps.batch_account;
 
-        let batch = &mut ctx.accounts.batch_account;
-        batch.owner = owner;
-        batch.csi_project_id = csi_project_id;
-        batch.verified_amount = verified_amount;
-        batch.minted_amount = 0;
-        batch.retired_amount = 0;
-        batch.minted = false;
-        batch.bump = ctx.bumps.batch_account;
-
-        Ok(())
-    }
+    Ok(())
+}
 
     /// Mints tokens 1:1 against a verified batch, into the ONE global
     /// mint set up in init_platform. The cap on this batch is enforced
@@ -144,6 +171,22 @@ pub mod ksha {
 // ACCOUNT STATE
 // ─────────────────────────────────────────────────────────
 
+
+/// One per registered CSI project. Created once during onboarding,
+/// read every time create_batch needs to know which wallet a given
+/// CSI project ID actually belongs to.
+#[account]
+pub struct PlantAccount {
+    pub owner: Pubkey,
+    pub csi_project_id: String,
+    pub bump: u8,
+}
+ 
+impl PlantAccount {
+    // discriminator(8) + owner(32) + csi_project_id(4+32) + bump(1)
+    pub const LEN: usize = 8 + 32 + (4 + 32) + 1;
+}
+
 /// Platform-wide singleton. Exactly one of these ever exists.
 /// Records the one global mint and the bump for the authority PDA
 /// so mint_batch can re-derive the signer seeds without re-deriving
@@ -182,6 +225,33 @@ impl BatchAccount {
 // CONTEXTS
 // ─────────────────────────────────────────────────────────
 
+
+#[derive(Accounts)]
+#[instruction(owner: Pubkey, csi_project_id: String)]
+pub struct RegisterPlant<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+ 
+    #[account(
+        seeds = [b"platform_state"],
+        bump = platform_state.bump
+    )]
+    pub platform_state: Account<'info, PlatformState>,
+ 
+    #[account(
+        init,
+        payer = admin,
+        space = PlantAccount::LEN,
+        seeds = [b"plant", csi_project_id.as_bytes()],
+        bump
+    )]
+    pub plant_account: Account<'info, PlantAccount>,
+ 
+    pub system_program: Program<'info, System>,
+}
+
+
+
 #[derive(Accounts)]
 pub struct InitPlatform<'info> {
     #[account(mut)]
@@ -219,7 +289,7 @@ pub struct InitPlatform<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(owner: Pubkey, csi_project_id: String, verified_amount: u64)]
+#[instruction(csi_project_id: String, verified_amount: u64)]
 pub struct CreateBatch<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -229,6 +299,17 @@ pub struct CreateBatch<'info> {
         bump = platform_state.bump
     )]
     pub platform_state: Account<'info, PlatformState>,
+
+    #[account(
+        seeds = [b"plant", csi_project_id.as_bytes()],
+        bump = plant_account.bump
+    )]
+    pub plant_account: Account<'info, PlantAccount>,
+
+    /// CHECK: not read as data, only its key is compared against
+    /// plant_account.owner — the registered PlantAccount is the real
+    /// source of truth, not this account.
+    pub owner: UncheckedAccount<'info>,
 
     #[account(
         init,
@@ -305,6 +386,8 @@ pub struct RetireBatch<'info> {
 pub enum ErrorCode {
     #[msg("Only the platform admin can perform this action")]
     Unauthorized,
+    #[msg("Owner does not match the registered plant owner for this project")]
+    OwnerMismatch,
     #[msg("CSI project ID exceeds 32 characters")]
     ProjectIdTooLong,
     #[msg("Amount must be greater than zero")]

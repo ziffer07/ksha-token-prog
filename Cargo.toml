@@ -1,5 +1,5 @@
 [workspace]
-members = [ "app/client-side",
+members = [ "app/client-side", "call-prog/client-call",
     "programs/*"
 ]
 resolver = "2"

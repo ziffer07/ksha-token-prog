@@ -9,7 +9,7 @@ skip-lint = false
 ksha_csi_cc = "3J9w5Aof5M4CZtWCmQpEVAQTT1Z26AViYR8mxMnwvdq6"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
