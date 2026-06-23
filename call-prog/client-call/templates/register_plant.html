@@ -1,0 +1,175 @@
+{# templates/register_plant.html
+   Askama template — rendered by your Rust handler at, e.g., GET /register-plant.
+   Plain HTML form, standard POST submit — no JS required.
+   Your handler at POST /register-plant receives `csi_project_id` and
+   `owner_pubkey` as form fields and wires them into your existing
+   RegisterPlant instruction call. #}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ksha Admin — Register Plant</title>
+<style>
+  :root {
+    --bg: #14110f;
+    --panel: #1c1814;
+    --border: #322c25;
+    --text: #ece6da;
+    --text-dim: #8a8174;
+    --accent: #c98a3e;
+    --error: #c4554d;
+    --success: #5c8a5c;
+    --mono: 'SF Mono', 'Consolas', monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%;
+    max-width: 480px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 32px;
+  }
+  .card-label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .sub {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 28px;
+  }
+  form { display: flex; flex-direction: column; gap: 20px; }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 5px;
+  }
+  input[type="text"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 11px 12px;
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--text);
+  }
+  input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  input[type="text"]::placeholder { color: var(--text-dim); opacity: 0.6; }
+  input[required]:invalid { box-shadow: none; }
+
+  button {
+    margin-top: 8px;
+    background: var(--accent);
+    color: #1a1208;
+    border: none;
+    border-radius: 5px;
+    padding: 13px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.07); }
+  button:active { filter: brightness(0.95); }
+
+  .banner {
+    border-radius: 5px;
+    padding: 11px 14px;
+    font-size: 13px;
+    margin-bottom: 20px;
+    border: 1px solid;
+  }
+  .banner.success {
+    background: rgba(92,138,92,0.12);
+    border-color: var(--success);
+    color: #a8d2a8;
+  }
+  .banner.error {
+    background: rgba(196,85,77,0.12);
+    border-color: var(--error);
+    color: #e8a8a3;
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="card-label">Ksha Admin</div>
+    <h1>Register Plant</h1>
+    <p class="sub">One-time setup, run once per plant owner during onboarding.</p>
+
+    {% if let Some(success_msg) = success %}
+      <div class="banner success">{{ success_msg }}</div>
+    {% endif %}
+    {% if let Some(error_msg) = error %}
+      <div class="banner error">{{ error_msg }}</div>
+    {% endif %}
+
+    <form method="POST" action="/register-plant">
+      <div>
+        <label for="csi_project_id">CSI Project ID</label>
+        <input
+          type="text"
+          id="csi_project_id"
+          name="csi_project_id"
+          placeholder="e.g. GCSP1084"
+          required
+          maxlength="32"
+          autocomplete="off"
+        >
+        <div class="hint">Must match the project ID exactly as it appears in CSI's registry.</div>
+      </div>
+
+      <div>
+        <label for="owner_pubkey">Plant Owner Wallet Address</label>
+        <input
+          type="text"
+          id="owner_pubkey"
+          name="owner_pubkey"
+          placeholder="e.g. 4dv8abYeJFTK85TT4uSY3G9kHx1ZP2LiohAZ2FYrLS9F"
+          required
+          minlength="32"
+          maxlength="44"
+          pattern="[1-9A-HJ-NP-Za-km-z]+"
+          autocomplete="off"
+        >
+        <div class="hint">Their Solana wallet's public address. Confirm this with them directly before submitting.</div>
+      </div>
+
+      <button type="submit">Register Plant</button>
+    </form>
+  </div>
+</body>
+</html>
