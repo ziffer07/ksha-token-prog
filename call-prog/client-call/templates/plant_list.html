@@ -1,0 +1,107 @@
+{# templates/plants_list.html
+   Lists every registered PlantAccount (fetched via getProgramAccounts),
+   with a per-plant link to create a batch + mint for them. #}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ksha Admin — Plants</title>
+<style>
+  :root {
+    --bg: #14110f; --panel: #1c1814; --border: #322c25;
+    --text: #ece6da; --text-dim: #8a8174; --accent: #c98a3e;
+    --error: #c4554d; --success: #5c8a5c; --mono: 'SF Mono','Consolas',monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, system-ui, sans-serif;
+    min-height: 100vh; padding: 40px 24px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .card-label {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 8px;
+  }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: var(--text-dim); margin-bottom: 28px; }
+  .sub a { color: var(--accent); text-decoration: none; }
+
+  .plant-row {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .plant-info { min-width: 0; }
+  .plant-project {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .plant-owner {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .btn {
+    flex-shrink: 0;
+    background: var(--accent);
+    color: #1a1208;
+    border: none;
+    border-radius: 5px;
+    padding: 9px 16px;
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn:hover { filter: brightness(1.07); }
+
+  .empty {
+    color: var(--text-dim);
+    font-size: 14px;
+    padding: 24px;
+    text-align: center;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card-label">Ksha Admin</div>
+    <h1>Registered Plants</h1>
+    <p class="sub"><a href="/register-plant">← Register a new plant</a></p>
+
+    {% if plants.is_empty() %}
+      <div class="empty">No plants registered yet.</div>
+    {% else %}
+      {% for plant in plants %}
+        <div class="plant-row">
+          <div class="plant-info">
+            <div class="plant-project">{{ plant.csi_project_id }}</div>
+            <div class="plant-owner">{{ plant.owner }}</div>
+          </div>
+          <a class="btn" href="/create-batch?project_id={{ plant.csi_project_id }}&owner={{ plant.owner }}">
+            Create batch + mint
+          </a>
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+</body>
+</html>

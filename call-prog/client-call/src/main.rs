@@ -7,10 +7,7 @@ use std::{str::FromStr, sync::Arc};
 
 use askama::Template;
 use axum::{
-    extract::{Form, State},
-    response::{Html, IntoResponse},
-    routing::{get, post},
-    Router,
+    Router, extract::{Form, Query, State}, response::{Html, IntoResponse}, routing::{get, post},
 };
 use serde::Deserialize;
 
@@ -38,10 +35,37 @@ struct RegisterPlantTemplate {
     error: Option<String>,
 }
 
+#[derive(Template)]
+#[template(path = "plant_list.html")]
+struct PlantsListTemplate{
+    plants: Vec<PlantRow>,
+}
+
+struct PlantRow {
+    csi_project_id: String,
+    owner: String,
+}
+
+#[derive(Template)]
+#[template(path="create_batch.html")]
+struct CreateBatchTemplate{
+    project_id: String,
+    owner: String,
+    success: Option<String>,
+    error: Option<String>,
+}
+
+
 #[derive(Deserialize)]
 struct RegisterPlantForm {
     csi_project_id: String,
     owner_pubkey: String,
+}
+
+#[derive(Deserialize)]
+struct CreateBatchQuery {
+    project_id: String,
+    owner: String,
 }
 
 async fn show_form() -> impl IntoResponse {
@@ -138,10 +162,79 @@ async fn submit_form(
     Html(tpl.render().unwrap())
 }
 
+
+
+
+
+
+// ───────────────────────────────────────────────────────────
+// /plants — lists every PlantAccount via getProgramAccounts
+// ───────────────────────────────────────────────────────────
+// PDAs are deterministic only if you already know the seed (the project ID) — there's no way to derive "every PlantAccount" from
+// seed math alone. getProgramAccounts asks the RPC node to scan every account owned by our program and return the ones whose byte layout
+// matches PlantAccount's discriminator. This is the standard way to "list all X" for any on-chain account type, given a small/moderate
+// account count — at large scale you'd eventually want an indexer instead of scanning on every page load, but that's not a concern at your current plant count.
+ 
+async fn list_plants(State(state): State<AppState>) -> impl IntoResponse {
+    let plants = match fetch_all_plants(&state).await {
+        Ok(p) => p,
+        Err(e) => {
+            // Render the list page with zero plants rather than a hard
+            // error page — an RPC hiccup shouldn't take the whole admin
+            // tool down. The println still surfaces the real cause in
+            // your server logs.
+            eprintln!("Failed to fetch plants: {}", e);
+            vec![]
+        }
+    };
+ 
+    let tpl = PlantsListTemplate { plants };
+    Html(tpl.render().unwrap())
+}
+ 
+async fn fetch_all_plants(state: &AppState) -> anyhow::Result<Vec<PlantRow>> {
+    // program.accounts::<T>() fetches every account matching T's
+    // discriminator automatically — anchor_client handles the
+    // discriminator filter for us, we don't construct it by hand.
+    let accounts: Vec<(Pubkey, ksha_csi_cc::accounts::PlantAccount)> =
+        state.program.accounts(vec![]).await?;
+ 
+    let rows = accounts
+        .into_iter()
+        .map(|(_pubkey, plant)| PlantRow {
+            csi_project_id: plant.csi_project_id,
+            owner: plant.owner.to_string(),
+        })
+        .collect();
+ 
+    Ok(rows)
+}
+
+
+
+// /show_create_batch_form
+
+async fn show_create_batch_form(
+    Query(q): Query<CreateBatchQuery>
+) -> impl IntoResponse {
+    let tpl = CreateBatchTemplate{
+        project_id: q.project_id,
+        owner: q.owner,
+        success: None,
+        error: None
+    };
+    Html(tpl.render().unwrap())
+}
+
+
+
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/register-plant", get(show_form))
         .route("/register-plant", post(submit_form))
+        .route("/plants", get(list_plants))
+        .route("/create-batch", get(show_create_batch_form))
         .with_state(state)
 }
 
