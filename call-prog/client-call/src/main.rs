@@ -1,6 +1,7 @@
 use anchor_client::{
     Client, Cluster, CommitmentConfig, Signer,
 };
+use anchor_spl::associated_token::{get_associated_token_address, spl_associated_token_account::instruction::create_associated_token_account};
 use solana_sdk::signature::{read_keypair_file, Keypair};
 use anchor_lang::prelude::*;
 use std::{str::FromStr, sync::Arc};
@@ -66,6 +67,13 @@ struct RegisterPlantForm {
 struct CreateBatchQuery {
     project_id: String,
     owner: String,
+}
+
+#[derive(Deserialize)]
+struct CreateBatchForm {
+    csi_project_id: String,
+    owner_pubkey: String,
+    verified_amount: u64
 }
 
 async fn show_form() -> impl IntoResponse {
@@ -227,6 +235,178 @@ async fn show_create_batch_form(
 }
 
 
+async fn submit_create_batch_form(
+    State(state): State<AppState>,
+    Form(cb_form): Form<CreateBatchForm>,
+) -> impl IntoResponse {
+        let csi_project_id = cb_form.csi_project_id.trim().to_string();
+ 
+        let owner_pubkey = match Pubkey::from_str(cb_form.owner_pubkey.trim()) {
+            Ok(pk) => pk,
+            Err(_) => {
+                let tpl = CreateBatchTemplate {
+                    project_id: csi_project_id,
+                    owner: cb_form.owner_pubkey,
+                    success: None,
+                    error: Some("Owner address is not a valid Solana pubkey.".into()),
+                };
+                return Html(tpl.render().unwrap());
+            }
+        };
+
+        let verified_amount = cb_form.verified_amount;
+        if verified_amount == 0 {
+            let tpl = CreateBatchTemplate {
+                project_id: csi_project_id,
+                owner: owner_pubkey.to_string(),
+                success: None,
+                error: Some("Enter a valid number".into())
+            };
+            return Html(tpl.render().unwrap());
+        };
+
+        // ── Fetch platform_state live to get the real mint address.
+        // Never hardcode this — if the program is ever redeployed fresh,
+        // a hardcoded mint silently points at nothing. ──
+        let platform_state_account: ksha_csi_cc::accounts::PlatformState =
+            match state.program.account(state.platform_state).await {
+                Ok(acc) => acc,
+                Err(e) => {
+                    let tpl = CreateBatchTemplate {
+                        project_id: csi_project_id,
+                        owner: owner_pubkey.to_string(),
+                        success: None,
+                        error: Some(format!("Failed to read platform state: {}", e)),
+                    };
+                    return Html(tpl.render().unwrap());
+                }
+            };
+        let mint_pubkey = platform_state_account.mint;
+    
+        let (plant_acc, _) =
+            Pubkey::find_program_address(&[b"plant", csi_project_id.as_bytes()], &ksha_csi_cc::ID);
+        let (batch_acc, _) = Pubkey::find_program_address(
+            &[b"batch", owner_pubkey.as_ref(), csi_project_id.as_bytes()],
+            &ksha_csi_cc::ID,
+        );
+        let (platform_authority, _) = Pubkey::find_program_address(&[b"platform_authority"], &ksha_csi_cc::ID);
+
+        let mut create_batch_ixs = state
+            .program
+            .request()
+            .accounts(accounts::CreateBatch{
+                admin: state.admin.pubkey(),
+                platform_state: state.platform_state,
+                plant_account: plant_acc,
+                owner: owner_pubkey,
+                batch_account: batch_acc,
+                system_program: anchor_lang::solana_program::system_program::ID,
+            })
+            .args(args::CreateBatch{
+                csi_project_id: csi_project_id.clone(),
+                verified_amount: verified_amount,
+            })
+            .instructions();
+
+        if create_batch_ixs.is_empty() {
+            let tpl = CreateBatchTemplate {
+                project_id: csi_project_id,
+                owner: owner_pubkey.to_string(),
+                success: None,
+                error: Some("Failed to build create_batch instruction.".into()),
+            };
+            return Html(tpl.render().unwrap());
+        };
+
+        let create_batch_ix = create_batch_ixs.remove(0);
+
+
+
+        // ── Instruction 2: create the owner's ATA (idempotent — if it
+        // already exists from a prior batch, this instruction is a no-op
+        // rather than an error, since spl-associated-token-account's
+        // create instruction handles "already exists" gracefully on most
+        // versions; if yours errors instead, that's the next thing to
+        // check if this specific step fails on a second batch for the
+        // same owner). ──
+
+        let owner_ata = get_associated_token_address(&owner_pubkey, &mint_pubkey);
+        let create_ata_ix = create_associated_token_account(
+            &state.admin.pubkey(),
+            &owner_pubkey, 
+            &mint_pubkey, 
+            &anchor_spl::token::ID,
+        );
+
+
+        // Instruction 3: Mint the batch
+        let mut mint_batch_ixs = state
+            .program
+            .request()
+            .accounts(accounts::MintBatch{
+                payer: state.admin.pubkey(),
+                platform_state: state.platform_state,
+                platform_authority: platform_authority,
+                batch_account: batch_acc,
+                mint: mint_pubkey,
+                owner_token_account: owner_ata,
+                token_program: anchor_spl::token::ID,
+            })
+            .args(args::MintBatch{
+                amount: verified_amount,
+            })
+            .instructions();
+
+        if mint_batch_ixs.is_empty() {
+            let tpl = CreateBatchTemplate {
+                project_id: csi_project_id,
+                owner: owner_pubkey.to_string(),
+                success: None,
+                error: Some("Failed to mint batch instruction".into())
+            };
+            return Html(tpl.render().unwrap());
+        }
+
+        let mint_batch_ix = mint_batch_ixs.remove(0);
+
+
+        // ── Send all three in one transaction — atomic: if mint_batch
+        // fails, create_batch is rolled back too, so you never end up with
+        // a batch that exists on-chain but was never minted. ──
+        let send_result = state
+            .program
+            .request()
+            .instruction(create_batch_ix)
+            .instruction(create_ata_ix)
+            .instruction(mint_batch_ix)
+            .signer(state.admin.clone())
+            .send()
+            .await;
+
+        let tpl = match send_result {
+            Ok(signature) => CreateBatchTemplate {
+                project_id: csi_project_id.clone(),
+                owner: owner_pubkey.to_string(),
+                success: Some(format!(
+                    "Minted {} tokens for project {} to {}. Tx: {}",
+                    cb_form.verified_amount, csi_project_id.clone(), owner_pubkey, signature
+                )),
+                error: None,
+            },
+            Err(e) => CreateBatchTemplate { 
+                project_id: csi_project_id, 
+                owner: owner_pubkey.to_string(), 
+                success: None, 
+                error: Some(format!("Failed {}", e))
+            }
+        };
+        Html(tpl.render().unwrap())
+
+}
+
+
+
+
 
 
 pub fn router(state: AppState) -> Router {
@@ -235,6 +415,7 @@ pub fn router(state: AppState) -> Router {
         .route("/register-plant", post(submit_form))
         .route("/plants", get(list_plants))
         .route("/create-batch", get(show_create_batch_form))
+        .route("/create-batch", post(submit_create_batch_form))
         .with_state(state)
 }
 

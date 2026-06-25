@@ -62,6 +62,5 @@ Both pieces are functional for their intended scope - landing page for outreach,
 
 ## TODOs
 
-Add a post /create-batch route. For this, I will have to write a function to submit the form and post the data on chain. All stuff stays mostly same but I need to take the data in form and check that for verification. Once success then return the template. This will create batch and mint the token at plant owners wallet.
 Update the /plants route. Here, I should only show the tokens that are minted and an input bar where the buyer places order for the amount of tokens they need at their price or the market price (either). Then write logic to make that transfer happen. Should that process be abstracted? Maybe?
 Add a login option where only authorized buyers are allowed to participate in the market. Once the KYC is done they can participate.
